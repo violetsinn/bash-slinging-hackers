@@ -6,6 +6,11 @@ from collections import Counter
 import numpy as np
 import pandas as pd
 
+import numpy as np
+import pandas as pd
+from sklearn.model_selection import train_test_split
+from sklearn.linear_model import LogisticRegression
+
 import matplotlib.pyplot as plt
 import base64
 import email
@@ -30,11 +35,8 @@ warnings.filterwarnings('ignore')
 
 def getSpamWords():
 
-    f = open("word_list.dat","r")
-    contents = f.readlines()
-    contents = [i.strip()[1:] for i in contents]
    
-    # contents = ['winning', 'win', 'please', 'offer', 'contact', 'rates', 'death', 'dear', 'remove', 'guarantee', '$', '$$', '$$$', 'click', 'credit', 'cash', '!!', '!!!', '%', 'transfer', 'visit', 'body']
+    contents = ['winning', 'win', 'please', 'offer', 'contact', 'rates', 'death', 'dear', 'remove', 'guarantee', '$', '$$', '$$$', 'click', 'credit', 'cash', '!!', '!!!', '%', 'transfer', 'visit', 'body']
     return contents
 
 
@@ -60,22 +62,32 @@ def connect_to_gmail():
         for message in messages:
             msg = service.users().messages().get(userId='me', id=message['id']).execute()
             # print("KEYS)")
-            convertText = msg["payload"]["parts"][0]["body"]["data"]
-            msg_str = base64.urlsafe_b64decode(convertText).decode("utf-8")
+            # print(msg["payload"])
+            # print(msg["raw"])
+            # print(msg["payload"]["body"]["data"])
+            if "parts" not in msg["payload"].keys():
 
-            msg_str = msg_str.lower()
-            return msg_str
-        # for m in messages:3
-        #     message = service.users().messages().get(userId='me', id=m['id'], format='raw').execute()
+                convertText = base64.urlsafe_b64decode(msg["payload"]["body"]["data"]).decode("utf-8")
+            else:
+                convertText =  base64.urlsafe_b64decode(msg["payload"]["parts"][0]["body"]["data"]).decode("utf-8")
             
-        #     # print(str(msg_str))
+            emailSender = ""
+            for i in msg["payload"]["headers"]:
+                if "name" in i:
+                    if i["name"] == "From":
+                        emailSender = i["value"]
 
-        #     mime_msg = email.message_from_string(str(msg_str))
-
-        #     return mime_msg
-            # msg = service.users().messages().get(userId='me', id=message['id'], format = 'full').execute()
-            # email_str = msg['snippet']
-            # print(msg.keys())
+            # if msg["payload"]["headers"]["name"] == "From":
+            #     emailSender = msg["payload"]["headers"]["value"]
+            # else:
+            #     print("Error")
+            # emailSender = base64.urlsafe_b64decode(emailSender).decode("utf-8")
+            print(emailSender)
+            # msg_str = msg_str.lower()
+            # emailSender =  base64.urlsafe_b64decode(emailSender).decode("utf-8")
+            # print(emailSender)
+            return convertText, emailSender
+       
 
 
 
@@ -93,35 +105,32 @@ def words_in_texts(words, texts):
     return indicator_array
 
 def checkSpam(word_list, email):
-    email = email.lower()
-
-    original_training_data = pd.read_csv('data/train.csv')
-    original_training_data['email'] = original_training_data['email'].str.lower()
-    original_training_data = original_training_data.fillna(" ")
-
-    from sklearn.model_selection import train_test_split
-    [train, val] = train_test_split(original_training_data, test_size=0.1)
-
+    
     def feature_matrix(words, texts):
         '''
         Args:
             words (list-like): words to find
             texts (Series): strings to search in
-        
+
         Returns:
             NumPy array of 0s and 1s with shape (n, p) where n is the
             number of texts and p is the number of words.
         '''
         indicator_array = np.array([[(word in text) & (len(text) < 22000) for word in words] for text in texts])
         return indicator_array
+    
+    original_training_data = pd.read_csv('data/train.csv')
+    test = pd.read_csv('data/test.csv')
 
-    from sklearn.linear_model import LogisticRegression
-
+    original_training_data['email'] = original_training_data['email'].str.lower().fillna(" ")
+    
+    [train, val] = train_test_split(original_training_data, test_size=0.1)
+    
     phi_train = feature_matrix(word_list, train['email'])
     y_train = train['spam']
 
     model = LogisticRegression().fit(phi_train, y_train)
-    return model.predict(feature_matrix(word_list, email))
+    return int(model.predict(feature_matrix(word_list, [email])))
 
 
 
@@ -133,38 +142,25 @@ def main():
     spam_msg = "This message is likely to be spam!"
     phish_msg = "This message is likely to be a phishing email!"
     sender_msg = "This message is likely to be sent from a non-trustworthy source."
+
+
+    email_content, sendTo = connect_to_gmail() # Gets most recent email from gmail 
+
+    print("Sending to: ", sendTo)
+    word_list = getSpamWords() # Receives list of spam words
     
-    #REPLACE THESE WITH FUNCTION CALLS
-
-    # word_list = ['guaranteed', 'today', 'winner', 'easy', 'simple']
-    # email_content = ["Here is a random message that should not be spam"]
-
-    # print("trying to connect to gmail")
-    # print(connect_to_gmail())
-
-
-    email_content = connect_to_gmail()
-
-    word_list = getSpamWords()
-
-    print("Email: ", email_content)
-    print("Spam words: ", word_list)
-
-    # print("\n That's the connection to gmail")
-
-    if 0 == checkSpam(word_list, email_content)[0]:
+    # Returns a 0 if spam 
+    if 0 == checkSpam(word_list, email_content):
         print("This email is clean")
         spam = False
         
     else:
-        print("This email is SPAMMMMM")
+        print("This email is Spam")
         spam = True 
 
     # TODO : Replace with actual code 
 
-   
-    phish = False
-    sender = False
+
     email = ""
     context = ssl.create_default_context()
 
@@ -176,17 +172,13 @@ def main():
 
         if spam == True:
             email += spam_msg+ "<br>" 
-        if phish == True:
-            email += phish_msg+ "<br>" 
-        if sender == True:
-            email += sender_msg+ "<br>" 
-
+        
         if email == "":
-            # server.sendmail('humsincident@gmail.com', sendTo, "This is a clean email my d00der")
-            print("Clean email sent!")
+            server.sendmail('humsincident@gmail.com', sendTo, "This is a clean email")
+            print("Clean Email")
             
         else:
-            # server.sendmail('humsincident@gmail.com', sendTo, email)
+            server.sendmail('humsincident@gmail.com', sendTo, email)
             print("Spam email sent!")
             
         server.close()
